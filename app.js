@@ -25,6 +25,7 @@ const getAccessToken = async () => {
             },
         });
         accessToken = response.data.access_token;
+        console.log('Access Token refreshed:', accessToken); // Log the new access token
     } catch (error) {
         console.error('Error fetching access token:', error);
     }
@@ -39,11 +40,13 @@ const getCurrentPlayingTrack = async () => {
             },
         });
 
+        // Check if there is a currently playing track
         if (response.status === 204 || !response.data) {
             console.log('No song is currently playing.');
             return;
         }
 
+        // Extract song data
         const songData = {
             song: response.data.item.name,
             artist: response.data.item.artists.map(artist => artist.name).join(', '),
@@ -51,6 +54,7 @@ const getCurrentPlayingTrack = async () => {
             albumArt: response.data.item.album.images[0].url,
         };
 
+        // Write song data to JSON file
         fs.writeFileSync('./current_song.json', JSON.stringify(songData, null, 2));
         console.log('Current song data written to JSON file:', songData);
     } catch (error) {
@@ -58,17 +62,17 @@ const getCurrentPlayingTrack = async () => {
     }
 };
 
-// Run the task every second
-cron.schedule('* * * * * *', async () => {
-    if (!accessToken) await getAccessToken();
-    await getCurrentPlayingTrack();
+// Run the task every 5 seconds (adjust the cron expression as needed)
+cron.schedule('*/5 * * * * *', async () => {  // Runs every 5 seconds
+    if (!accessToken) await getAccessToken(); // Get a new access token if it's not available
+    await getCurrentPlayingTrack(); // Fetch the current playing track
 });
 
 // Set up a route to serve the JSON data
 app.get('/current-song', (req, res) => {
     try {
         const data = fs.readFileSync('./current_song.json');
-        res.json(JSON.parse(data));
+        res.json(JSON.parse(data)); // Send the current song data as JSON response
     } catch (error) {
         res.status(500).json({ error: 'No song data available.' });
     }
