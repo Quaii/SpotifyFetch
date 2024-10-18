@@ -1,41 +1,68 @@
 const express = require('express');
 const axios = require('axios');
-require('dotenv').config();
-
+const session = require('express-session');
 const app = express();
-const port = process.env.PORT || 3000;
 
-let accessToken = null;
-let refreshToken = process.env.SPOTIFY_REFRESH_TOKEN; // Ensure your refresh token is set in your .env file
+const SPOTIFY_CLIENT_ID = '5d566c4c0f7c4e07a61b564b75f0a343';
+const SPOTIFY_CLIENT_SECRET = '95dc383328074fb8aff03b8d1f5e5114';
+const REDIRECT_URI = 'https://spotifyfetch.onrender.com/callback';
 
-// Function to get a new access token
-const getAccessToken = async () => {
+app.use(session({
+    secret: 'your-session-secret',
+    resave: false,
+    saveUninitialized: true,
+}));
+
+// Step 1: Redirect to Spotify Authorization
+app.get('/login', (req, res) => {
+    const scope = 'user-read-playback-state user-modify-playback-state user-read-currently-playing';
+    res.redirect(`https://accounts.spotify.com/authorize?response_type=code&client_id=${SPOTIFY_CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=${encodeURIComponent(scope)}`);
+});
+
+// Step 2: Handle Callback from Spotify
+app.get('/callback', async (req, res) => {
+    const code = req.query.code;
+
+    if (!code) {
+        return res.send('Authorization failed. No code received.');
+    }
+
     try {
-        const response = await axios({
-            method: 'post',
-            url: 'https://accounts.spotify.com/api/token',
+        const response = await axios.post('https://accounts.spotify.com/api/token', null, {
             params: {
-                grant_type: 'refresh_token',
-                refresh_token: refreshToken,
+                grant_type: 'authorization_code',
+                code: code,
+                redirect_uri: REDIRECT_URI,
             },
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
-                Authorization: 'Basic ' + Buffer.from(`${process.env.SPOTIFY_CLIENT_ID}:${process.env.SPOTIFY_CLIENT_SECRET}`).toString('base64'),
+                Authorization: 'Basic ' + Buffer.from(`${SPOTIFY_CLIENT_ID}:${SPOTIFY_CLIENT_SECRET}`).toString('base64'),
             },
         });
-        
-        accessToken = response.data.access_token;
-        console.log('New access token fetched successfully');
-    } catch (error) {
-        console.error('Error fetching access token:', error.response ? error.response.data : error.message);
-        if (error.response && error.response.data.error === 'invalid_grant') {
-            console.error('Invalid refresh token. You may need to reauthorize.');
-        }
-    }
-};
 
-// Function to fetch the current playing track
-const getCurrentPlayingTrack = async () => {
+        const { access_token, refresh_token } = response.data;
+        console.log('Access Token:', access_token);
+        console.log('Refresh Token:', refresh_token);
+
+        // Save tokens in session for later use
+        req.session.access_token = access_token;
+        req.session.refresh_token = refresh_token;
+
+        res.send('Authorization successful! You can now <a href="/current-playback">check the current playback</a>.');
+    } catch (error) {
+        console.error('Error exchanging code for token:', error.response.data);
+        res.send('Error during authorization: ' + error.response.data.error_description);
+    }
+});
+
+// Step 3: Fetch Current Playback State
+app.get('/current-playback', async (req, res) => {
+    const accessToken = req.session.access_token;
+
+    if (!accessToken) {
+        return res.send('No access token found. Please log in again.');
+    }
+
     try {
         const response = await axios.get('https://api.spotify.com/v1/me/player/currently-playing', {
             headers: {
@@ -43,44 +70,58 @@ const getCurrentPlayingTrack = async () => {
             },
         });
 
-        if (response.status === 204 || !response.data) {
-            console.log('No song is currently playing.');
-            return;
-        }
-
-        const songData = {
-            song: response.data.item.name,
-            artist: response.data.item.artists.map(artist => artist.name).join(', '),
-            album: response.data.item.album.name,
-            albumArt: response.data.item.album.images[0].url,
-        };
-
-        // Respond with the current song data
-        return songData;
+        res.json(response.data);
     } catch (error) {
-        console.error('Error fetching current track:', error.response ? error.response.data : error.message);
+        console.error('Error fetching current playback:', error.response.data);
+
+        if (error.response.status === 401) {
+            // If the access token is invalid, try refreshing it
+            const newAccessToken = await refreshAccessToken(req.session.refresh_token);
+            req.session.access_token = newAccessToken; // Update session with new access token
+            
+            // Retry fetching the current playback state with the new access token
+            try {
+                const retryResponse = await axios.get('https://api.spotify.com/v1/me/player/currently-playing', {
+                    headers: {
+                        Authorization: `Bearer ${newAccessToken}`,
+                    },
+                });
+
+                res.json(retryResponse.data);
+            } catch (retryError) {
+                console.error('Error fetching current playback after refresh:', retryError.response.data);
+                res.send('Error fetching current playback: ' + retryError.response.data.error.message);
+            }
+        } else {
+            res.send('Error fetching current playback: ' + error.response.data.error.message);
+        }
+    }
+});
+
+// Step 4: Refresh Access Token
+const refreshAccessToken = async (refreshToken) => {
+    try {
+        const response = await axios.post('https://accounts.spotify.com/api/token', null, {
+            params: {
+                grant_type: 'refresh_token',
+                refresh_token: refreshToken,
+            },
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                Authorization: 'Basic ' + Buffer.from(`${SPOTIFY_CLIENT_ID}:${SPOTIFY_CLIENT_SECRET}`).toString('base64'),
+            },
+        });
+
+        console.log('New Access Token:', response.data.access_token);
+        return response.data.access_token; // The new access token
+    } catch (error) {
+        console.error('Error refreshing access token:', error.response.data);
+        throw error;
     }
 };
 
-// Endpoint to get current song
-app.get('/current-song', async (req, res) => {
-    if (!accessToken) await getAccessToken();
-    
-    const currentTrack = await getCurrentPlayingTrack();
-    
-    if (currentTrack) {
-        res.json(currentTrack);
-    } else {
-        res.status(500).json({ error: 'No song data available or unable to fetch current track.' });
-    }
+// Start your server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
 });
-
-// Start the server
-app.listen(port, () => {
-    console.log(`Server running on port ${port}`);
-});
-
-// Initial token fetch for access token
-(async () => {
-    await getAccessToken();
-})();
