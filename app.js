@@ -70,7 +70,8 @@ app.get('/current-playback', async (req, res) => {
             },
         });
 
-        res.json(response.data);
+        const filteredData = filterPlaybackData(response.data);
+        res.json(filteredData); // Send filtered data as JSON
     } catch (error) {
         console.error('Error fetching current playback:', error.response.data);
 
@@ -87,7 +88,8 @@ app.get('/current-playback', async (req, res) => {
                     },
                 });
 
-                res.json(retryResponse.data);
+                const filteredData = filterPlaybackData(retryResponse.data);
+                res.json(filteredData); // Send filtered data as JSON
             } catch (retryError) {
                 console.error('Error fetching current playback after refresh:', retryError.response.data);
                 res.send('Error fetching current playback: ' + retryError.response.data.error.message);
@@ -118,6 +120,42 @@ const refreshAccessToken = async (refreshToken) => {
         console.error('Error refreshing access token:', error.response.data);
         throw error;
     }
+};
+
+// Function to filter playback data
+const filterPlaybackData = (data) => {
+    const filteredData = {
+        albumArt: {
+            small: null,
+            medium: null
+        },
+        artistName: null,
+        songTitle: null
+    };
+
+    // Check if there's a currently playing item
+    if (data && data.item) {
+        const images = data.item.album.images;
+
+        images.forEach(image => {
+            if (image.width === 64) {
+                filteredData.albumArt.small = image.url;
+            }
+            if (image.width === 300) {
+                filteredData.albumArt.medium = image.url;
+            }
+        });
+
+        // Get the artist name
+        if (data.item.artists.length > 0) {
+            filteredData.artistName = data.item.artists[0].name;
+        }
+
+        // Get the song title
+        filteredData.songTitle = data.item.name;
+    }
+
+    return filteredData;
 };
 
 // Start your server
