@@ -68,6 +68,11 @@ cron.schedule('*/5 * * * * *', async () => {  // Runs every 5 seconds
     await getCurrentPlayingTrack(); // Fetch the current playing track
 });
 
+// Set up a route for the root URL
+app.get('/', (req, res) => {
+    res.send('Welcome to the Spotify Fetch API! Access the current song data at <a href="/current-song">/current-song</a>.');
+});
+
 // Set up a route to serve the JSON data
 app.get('/current-song', (req, res) => {
     try {
